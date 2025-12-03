@@ -99,30 +99,29 @@ class PID_controller:
 class RobotController(Node):
     def __init__(self):
         super().__init__('controller')
+        self.timer = self.create_timer(1/90,self.main_loop)
         
-        q1 = math.radians(0)
-        q2 = math.radians(45)
-        q3 = math.radians(90)
-        L1 = .3
-        L2 = .3
-        L3 = .2
+        self.q1 = math.radians(0)
+        self.q2 = math.radians(0)
+        self.q3 = math.radians(0)
         
-        # T_01 = kinematics.rot_z(q1) @ kinematics.trans(0,0,0.3)
-        # T_12 = kinematics.rot_y(q2) @ kinematics.trans(0.3,0,0)
-        # T_global = T_01 @ T_12
+        self.L1 = .3
+        self.L2 = .3
+        self.L3 = .2        
+        self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)        
         
-        # position = T_global[:3,3]
-        # print(f"tip is at {position}")
+
+        
+    def main_loop(self):
         
         # Base -> Joint 1 (Rotation Z) -> Link 1 Tip (Translation Z)
-        T_01 = kinematics.rot_z(q1) @ kinematics.trans(0, 0, L1)
+        T_01 = kinematics.rot_z(self.q1) @ kinematics.trans(0, 0, self.L1)
 
         # Link 1 -> Joint 2 (Rotation Y) -> Link 2 Tip (Translation X)
-        T_12 = kinematics.rot_y(q2) @ kinematics.trans(L2, 0, 0)
+        T_12 = kinematics.rot_y(self.q2) @ kinematics.trans(self.L2, 0, 0)
 
         # Link 2 -> Joint 3 (Rotation Y) -> End Effector (Translation X)
-        T_23 = kinematics.rot_y(q3) @ kinematics.trans(L3, 0, 0)
-        
+        T_23 = kinematics.rot_y(self.q3) @ kinematics.trans(self.L3, 0, 0)
         
         # Position of Elbow (End of Link 1) 
         pos_elbow_matrix = T_01
@@ -136,62 +135,19 @@ class RobotController(Node):
         pos_tip_matrix = T_01 @ T_12 @ T_23
         xyz_tip = pos_tip_matrix[:3, 3]
         
-        print(f'elbow: {xyz_elbow[0]}')
-        print(f'wrist: {xyz_wrist}')
-        print(f'tip: {xyz_tip}')
-        
-        self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)        
-        
         msg = JointState()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "world"
         
         msg.name = ['joint1','joint2','joint3']
-        
-        msg.position = [float(q1), float(q2), float(q3)]
+        msg.position = [float(self.q1), float(self.q2), float(self.q3)]
         
         self.joint_pub.publish(msg)
         
+        self.q1 = math.radians(float(input("new q1: ")))
+        self.q2 = math.radians(float(input('new q2: ')))
+        self.q3 = math.radians(float(input('new q3: ')))
         
-        
-    # def arm_publisher(self):
-        # marker = Marker()
-        # marker.header.frame_id = "world"
-        # marker.header.stamp = self.get_clock().now().to_msg()
-        
-        # marker.id = 0 # This gives the marker an ID
-        # marker.type = Marker.LINE_STRIP
-        # marker.action = Marker.ADD
-        
-        # # Set line width
-        # marker.scale.x = 0.05
-        
-        # # Set line color (Blue)
-        # marker.color.b = 1.0
-        # marker.color.r = 0.5
-        # marker.color.a = 1.0
-        
-        # p_origin = Point() # Defines the origin of link 1
-        # p_origin.x = xyz_elbow[0]
-        # p_origin.y = xyz_elbow[1]
-        # p_origin.z = xyz_elbow[2]
-        
-        # # Define position of the elbow (the point where l1 and l2 connect)
-        # p_elbow = Point()
-        # p_elbow.x = xyz_wrist[0]
-        # p_elbow.y = xyz_wrist[1]
-        # p_elbow.z = xyz_wrist[2]
-        
-        
-        # p_hand = Point()
-        # p_hand.x = xyz_tip[0]
-        # p_hand.y = xyz_tip[1]
-        # p_hand.z = xyz_tip[2]
-        
-        # # Add the points to the marker's list    
-        # marker.points = [p_origin, p_elbow, p_hand] 
-        
-        # self.marker_publisher_.publish(marker)
         
         
         
