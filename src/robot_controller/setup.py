@@ -28,7 +28,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'run_controller = robot_controller.controller:main'
+            'run_controller = robot_controller.controller:main',
+            'joint = robot_controller.joint_publisher:main'
         ],
     },
 )

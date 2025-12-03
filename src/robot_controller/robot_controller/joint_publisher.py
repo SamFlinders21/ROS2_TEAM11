@@ -22,9 +22,9 @@ class JointPublisher(Node):
     def __init__(self):
         super().__init__('joint_limits_node')
             
-        self.pos = [0.0, 0.0]
-        self.vel = [0.0, 0.0]
-        self.delta_t = 0
+        self.pos = [0.0, 0.0, 0.0]
+        self.vel = [0.0, 0.0, 0.0]
+        # self.delta_t = 0
             
         self.last_cmd_time = self.get_clock().now()
             
@@ -36,22 +36,33 @@ class JointPublisher(Node):
             10
         )
             
-        self.publisher_ = self.create_publisher(JointState, 'joint_states',10)
+        self.publisher_ = self.create_publisher(JointState, '/joint_states',10)
         
     def cmd_callback(self,cmd_msg):
-        if len(cmd_msg.data) >= 2:
+        current_time = self.get_clock().now()
+        dt = (current_time - self.last_cmd_time).nanoseconds / 1e9
+        if dt > 0.1: 
+            dt = 0.0 # Ignore jumps
+            
+        if len(cmd_msg.data) >= 3:
+            
+            
+            
+            self.last_cmd_time = self.get_clock().now()
             self.vel[0] = cmd_msg.data[0]
             self.vel[1] = cmd_msg.data[1]
-            self.delta_t = cmd_msg.data[2]
+            self.vel[2] = cmd_msg.data[2]
+            # self.delta_t = cmd_msg.data[3]
             
-            self.pos[0] += self.vel[0] * self.delta_t
-            self.pos[1] += self.vel[1] * self.delta_t
+            self.pos[0] += self.vel[0] * dt
+            self.pos[1] += self.vel[1] * dt
+            self.pos[2] += self.vel[2] * dt
         
         # self.ang += self.angVel * delta_t
         
         msg = JointState()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.name = ['shoulder','elbow']
+        msg.header.stamp = current_time.to_msg()
+        msg.name = ['joint1','joint2','joint3']
         msg.position = self.pos
         msg.velocity = self.vel
         self.publisher_.publish(msg)

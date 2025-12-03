@@ -16,7 +16,7 @@ from visualization_msgs.msg import Marker
 
 class kinematics:        
     def rot_x(theta):
-        rad = math.radians(theta)
+        rad = theta
         c = np.cos(rad)
         s = np.sin(rad)
         return np.array([
@@ -27,7 +27,7 @@ class kinematics:
         ])
         
     def rot_y(theta):
-        rad = math.radians(theta)
+        rad = theta
         c = np.cos(rad)
         s = np.sin(rad)
         return np.array([
@@ -38,7 +38,7 @@ class kinematics:
         ])
     
     def rot_z(theta):
-        rad = math.radians(theta)
+        rad = theta
         c = np.cos(rad)
         s = np.sin(rad)
         return np.array([
@@ -99,7 +99,7 @@ class PID_controller:
 class RobotController(Node):
     def __init__(self):
         super().__init__('controller')
-        self.timer = self.create_timer(1/90,self.main_loop)
+        self.timer = self.create_timer(1/90,self.control_loop)
         
         self.q1 = math.radians(0)
         self.q2 = math.radians(0)
@@ -108,45 +108,154 @@ class RobotController(Node):
         self.L1 = .3
         self.L2 = .3
         self.L3 = .2        
-        self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)        
+        self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
         
+        #################################################
+        self.pid_1 = PID_controller(Kp=3,Ki=0,Kd=0.20)
+        self.pid_2 = PID_controller(Kp=2,Ki=0,Kd=0.10)
+        self.pid_3 = PID_controller(Kp=1,Ki=0,Kd=0.0)
+        #################################################
+        
+        self.last_time = self.get_clock().now()
+        self.vel_pub = self.create_publisher(Float64MultiArray, 'joint_velocities', 10)
+        
+        # Indexing/tolerance
+        self.current_idx = 0
+        self.tolerance = math.radians(1)
+        self.required_time = 2.0 # How long the arm is required to be within tolerance
+        self.stable_start_time = None
+        self.move_start_time = self.get_clock().now()
+        self.lap_time = 0
+        
+        # Current Angle
+        self.current_JS = JointState()
+        self.name = ['joint1','joint2','joint3']
+        self.current_JS.position = [0.0,0.0,0.0]
 
+        # Define home angles
+        home = JointState()
+        home.name = ['shoulder_joint','elbow_joint']
+        home.position = [0.0,0.0,0.0]
         
-    def main_loop(self):
+        pick = JointState()
+        pick.name = ['joint1','joint2','joint3']
+        pick.position = [math.radians(0),math.radians(120),math.radians(60)]
+            
+        place = JointState()
+        place.name = ['joint1','joint2','joint3']
+        place.position = [math.radians(135), math.radians(45), math.radians(0)]
         
-        # Base -> Joint 1 (Rotation Z) -> Link 1 Tip (Translation Z)
-        T_01 = kinematics.rot_z(self.q1) @ kinematics.trans(0, 0, self.L1)
+        # Creates a list of the targets
+        self.waypoints = [home, pick, place]
 
-        # Link 1 -> Joint 2 (Rotation Y) -> Link 2 Tip (Translation X)
-        T_12 = kinematics.rot_y(self.q2) @ kinematics.trans(self.L2, 0, 0)
+        # Trajectory settings
+        self.move_duration = 3.0 # Take 3 seconds to move between points
+        
+        # Track where we started the current motion
+        self.start_angles = [0.0, 0.0, 0.0]
+        
+        # Creates a subscriber node that listens to the joint_states topic, 
+        # expecting a "JointState" message. Each time that it receives one, 
+        # it calls the self.joint_callback function
+        self.subscription = self.create_subscription(
+            JointState,
+            '/joint_states',
+            self.sensor_callback,
+            10
+        )
+        
+    def sensor_callback(self,msg):
+        if len(msg.position) >= 3:
+            self.current_JS.position = msg.position
+        
+    def control_loop(self):
+        
+        now = self.get_clock().now() # Figure out when now is (interesting sentence)
+        delta_t = (now - self.last_time).nanoseconds / 1e9 # Figure out how long its been since last update
+        if delta_t == 0: return 
+        
+        # Get the final goal
+        final_goal = self.waypoints[self.current_idx]
+        
+        # self.q1 = self.current_JS.position[0]
+        # self.q2 = self.current_JS.position[1]
+        # self.q3 = self.current_JS.position[2]
+        
+        vel_1 = self.pid_1.update(final_goal.position[0],self.current_JS.position[0], delta_t)
+        vel_2 = self.pid_2.update(final_goal.position[1],self.current_JS.position[1], delta_t)
+        vel_3 = self.pid_3.update(final_goal.position[2],self.current_JS.position[2], delta_t)
+        
+        cmd_msg = Float64MultiArray()
+        cmd_msg.data = [float(vel_1), float(vel_2), float(vel_3), float(delta_t)]
+        
+        self.vel_pub.publish(cmd_msg)
+        
+        # # Base -> Joint 1 (Rotation Z) -> Link 1 Tip (Translation Z)
+        # T_01 = kinematics.rot_z(self.q1) @ kinematics.trans(0, 0, self.L1)
 
-        # Link 2 -> Joint 3 (Rotation Y) -> End Effector (Translation X)
-        T_23 = kinematics.rot_y(self.q3) @ kinematics.trans(self.L3, 0, 0)
-        
-        # Position of Elbow (End of Link 1) 
-        pos_elbow_matrix = T_01
-        xyz_elbow = pos_elbow_matrix[:3, 3]
+        # # Link 1 -> Joint 2 (Rotation Y) -> Link 2 Tip (Translation X)
+        # T_12 = kinematics.rot_y(self.q2) @ kinematics.trans(self.L2, 0, 0)
 
-        # Position of Wrist (End of Link 2)
-        pos_wrist_matrix = T_01 @ T_12
-        xyz_wrist = pos_wrist_matrix[:3, 3]
+        # # Link 2 -> Joint 3 (Rotation Y) -> End Effector (Translation X)
+        # T_23 = kinematics.rot_y(self.q3) @ kinematics.trans(self.L3, 0, 0)
+        
+        # # Position of Elbow (End of Link 1) 
+        # pos_elbow_matrix = T_01
+        # xyz_elbow = pos_elbow_matrix[:3, 3]
 
-        # Position of Tip (End Effector)
-        pos_tip_matrix = T_01 @ T_12 @ T_23
-        xyz_tip = pos_tip_matrix[:3, 3]
+        # # Position of Wrist (End of Link 2)
+        # pos_wrist_matrix = T_01 @ T_12
+        # xyz_wrist = pos_wrist_matrix[:3, 3]
+
+        # # Position of Tip (End Effector)
+        # pos_tip_matrix = T_01 @ T_12 @ T_23
+        # xyz_tip = pos_tip_matrix[:3, 3]
         
-        msg = JointState()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "world"
+        err_1 = math.fabs(final_goal.position[0] - self.current_JS.position[0])
+        err_2 = math.fabs(final_goal.position[1] - self.current_JS.position[1])
+        err_3 = math.fabs(final_goal.position[2] - self.current_JS.position[2])
         
-        msg.name = ['joint1','joint2','joint3']
-        msg.position = [float(self.q1), float(self.q2), float(self.q3)]
+        is_close = err_1 < self.tolerance and err_2 < self.tolerance
         
-        self.joint_pub.publish(msg)
+        # start checking done after move time has finished
         
-        self.q1 = math.radians(float(input("new q1: ")))
-        self.q2 = math.radians(float(input('new q2: ')))
-        self.q3 = math.radians(float(input('new q3: ')))
+        if is_close:
+            if self.stable_start_time is None:
+                self.stable_start_time = now
+            
+            elapsed = (now - self.stable_start_time).nanoseconds / 1e9
+            
+            if elapsed > self.required_time:
+                # switching targets
+                print(f"Move {self.current_idx} Complete.")
+                
+                # 1. Save where we are NOW as the start for the NEXT move
+                self.start_angles = [self.current_JS.position[0], self.current_JS.position[1], self.current_JS.position[2]]
+                
+                # 2. Reset timers
+                self.move_start_time = now
+                self.stable_start_time = None
+                
+                # 3. Increment Index
+                self.current_idx += 1
+                if self.current_idx >= len(self.waypoints):
+                    self.current_idx = 0
+                    print("Resetting to Waypoint 0")
+        else:
+            self.stable_start_time = None
+        
+        # msg = JointState()
+        # msg.header.stamp = self.get_clock().now().to_msg()
+        # msg.header.frame_id = "world"
+        
+        # msg.name = ['joint1','joint2','joint3']
+        # msg.position = [float(self.q1), float(self.q2), float(self.q3)]
+        
+        # self.joint_pub.publish(msg)
+        
+        # self.q1 = math.radians(float(input("new q1: ")))
+        # self.q2 = math.radians(float(input('new q2: ')))
+        # self.q3 = math.radians(float(input('new q3: ')))
         
         
         

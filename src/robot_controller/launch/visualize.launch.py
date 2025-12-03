@@ -33,12 +33,12 @@ def generate_launch_description():
         # NODE 2: Your Custom Controller
         # This replaces the 'joint_state_publisher_gui'.
         # It runs your Python script to generate the angles.
-        Node(
-            package='robot_controller',
-            executable='run_controller', # Must match 'console_scripts' in setup.py
-            name='my_custom_controller',
-            output='screen'
-        ),
+        # Node(
+        #     package='robot_controller',
+        #     executable='run_controller', # Must match 'console_scripts' in setup.py
+        #     name='my_custom_controller',
+        #     output='screen'
+        # ),
 
         # NODE 3: RViz2
         Node(
