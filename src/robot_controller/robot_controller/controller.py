@@ -4,8 +4,6 @@ import math
 import rclpy
 from rclpy.node import Node
 import numpy as np
-
-# These message types are required
 from std_msgs.msg import Float64
 from std_msgs.msg import Float64MultiArray
 from sensor_msgs.msg import JointState
@@ -13,6 +11,7 @@ from geometry_msgs.msg import Point
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TwistStamped
 from visualization_msgs.msg import Marker
+from robot_controller.planner import RRTplanner
 
 class kinematics:        
     def rot_x(theta):
@@ -122,7 +121,7 @@ class RobotController(Node):
         # Indexing/tolerance
         self.current_idx = 0
         self.tolerance = math.radians(1)
-        self.required_time = 2.0 # How long the arm is required to be within tolerance
+        self.required_time = 0.1 # How long the arm is required to be within tolerance
         self.stable_start_time = None
         self.move_start_time = self.get_clock().now()
         self.lap_time = 0
@@ -132,24 +131,65 @@ class RobotController(Node):
         self.name = ['joint1','joint2','joint3']
         self.current_JS.position = [0.0,0.0,0.0]
 
-        # Define home angles
-        home = JointState()
-        home.name = ['shoulder_joint','elbow_joint']
-        home.position = [0.0,0.0,0.0]
+        # # Define home angles
+        # home = JointState()
+        # home.name = ['shoulder_joint','elbow_joint']
+        # home.position = [0.0,0.0,0.0]
         
-        pick = JointState()
-        pick.name = ['joint1','joint2','joint3']
-        pick.position = [math.radians(0),math.radians(120),math.radians(60)]
+        # #####################################################################
+        # pick = JointState()
+        # pick.name = ['joint1','joint2','joint3']
+        # pick.position = [math.radians(0),math.radians(120),math.radians(60)]
             
-        place = JointState()
-        place.name = ['joint1','joint2','joint3']
-        place.position = [math.radians(135), math.radians(45), math.radians(0)]
+        # place = JointState()
+        # place.name = ['joint1','joint2','joint3']
+        # place.position = [math.radians(135), math.radians(45), math.radians(90)]
+        # #####################################################################
+        
+        start_conf = [0.0,0.0,0.0] # Home
+        pick_conf = [math.radians(30), math.radians(90), math.radians(0)]
+
+        # define obstacles
+        obstacles = [[1.0, 0.0, 1.0, 0.1]]
+        
+        # Display Obstacle
+        self.marker_pub = self.create_publisher(Marker, '/spheres', 10)
+        self.publish_sphere()
+        
+        # Limits (from urdf)
+        joint_limits = {
+            'joint1': (-3.14, 3.14),
+            'joint2': (-1.57, 1.57),
+            'joint3': (-1.57, 1.57)
+        }
+        
+        self.viz_pub = self.create_publisher(Marker, 'rrt_tree', 10)
+
+        # initialize the planner
+        self.get_logger().info('Starting RRT Planner...')
+        rrt = RRTplanner(start_conf,pick_conf, obstacles, joint_limits, self.viz_pub)
+        
+        # run the planner
+        path_list = rrt.plan()
+        
+        self.waypoints = []
+        
+        if path_list is None:
+            self.get_logger().error("RRT failed to find a path :(")
+        else:
+            self.get_logger().info(f"Path found with {len(path_list)} steps!")
+            
+            for point in path_list:
+                wp = JointState()
+                wp.name = ['joint1', 'joint2', 'joint3']
+                wp.position = point
+                self.waypoints.append(wp)
         
         # Creates a list of the targets
-        self.waypoints = [home, pick, place]
+        # self.waypoints = [home, pick, place]
 
         # Trajectory settings
-        self.move_duration = 3.0 # Take 3 seconds to move between points
+        # self.move_duration = 3.0 # Take 3 seconds to move between points
         
         # Track where we started the current motion
         self.start_angles = [0.0, 0.0, 0.0]
@@ -163,6 +203,36 @@ class RobotController(Node):
             self.sensor_callback,
             10
         )
+        
+    def publish_sphere(self):
+        obs_marker = Marker()
+        obs_marker.header.frame_id = "base_link"
+        obs_marker.header.stamp = self.get_clock().now().to_msg()
+        obs_marker.type = Marker.SPHERE
+        obs_marker.action = Marker.ADD
+        obs_marker.ns = "obstacles"
+        obs_marker.id = 1
+
+        obs_marker.pose.position.x = 1.0
+        obs_marker.pose.position.y = 0.0
+        obs_marker.pose.position.z = 1.0
+        
+        obs_marker.pose.orientation.x = 0.0
+        obs_marker.pose.orientation.y = 0.0
+        obs_marker.pose.orientation.z = 0.0
+        obs_marker.pose.orientation.w = 1.0
+        
+        obs_marker.scale.x = .2
+        obs_marker.scale.y = .2
+        obs_marker.scale.z = .2
+        
+        obs_marker.color.a = 0.8
+        obs_marker.color.r = 1.0
+        obs_marker.color.g = 0.0
+        obs_marker.color.b = 0.0 
+        
+        self.marker_pub.publish(obs_marker)
+        
         
     def sensor_callback(self,msg):
         if len(msg.position) >= 3:
