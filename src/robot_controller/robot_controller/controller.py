@@ -8,52 +8,9 @@ from std_msgs.msg import Float64
 from std_msgs.msg import Float64MultiArray
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import Point
-from geometry_msgs.msg import Twist
-from geometry_msgs.msg import TwistStamped
 from visualization_msgs.msg import Marker
-from robot_controller.planner import RRTplanner
+from robot_controller.planner import RRTplanner, GetJointLocations, Kinematics
 
-class kinematics:        
-    def rot_x(theta):
-        rad = theta
-        c = np.cos(rad)
-        s = np.sin(rad)
-        return np.array([
-            [1, 0, 0, 0],
-            [0, c, -s, 0],
-            [0, s, c, 0],
-            [0, 0, 0, 1]
-        ])
-        
-    def rot_y(theta):
-        rad = theta
-        c = np.cos(rad)
-        s = np.sin(rad)
-        return np.array([
-            [c, 0, s, 0],
-            [0, 1, 0, 0],
-            [-s, 0, c, 0],
-            [0, 0, 0, 1]
-        ])
-    
-    def rot_z(theta):
-        rad = theta
-        c = np.cos(rad)
-        s = np.sin(rad)
-        return np.array([
-            [c, -s, 0, 0],
-            [s, c, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
-        ])
-        
-    def trans(x,y,z):
-        return np.array([
-            [1, 0, 0, x],
-            [0, 1, 0, y],
-            [0, 0, 1, z],
-            [0, 0, 0, 1]
-        ])
 
 # PID Math
 class PID_controller:
@@ -104,15 +61,15 @@ class RobotController(Node):
         self.q2 = math.radians(0)
         self.q3 = math.radians(0)
         
-        self.L1 = .3
+        self.L1 = .2
         self.L2 = .3
-        self.L3 = .2        
+        self.L3 = .1        
         self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
         
         #################################################
-        self.pid_1 = PID_controller(Kp=3,Ki=0,Kd=0.20)
-        self.pid_2 = PID_controller(Kp=2,Ki=0,Kd=0.10)
-        self.pid_3 = PID_controller(Kp=1,Ki=0,Kd=0.0)
+        self.pid_1 = PID_controller(Kp=8,Ki=0,Kd=0.20)
+        self.pid_2 = PID_controller(Kp=5,Ki=0,Kd=0.10)
+        self.pid_3 = PID_controller(Kp=3,Ki=0,Kd=0.10)
         #################################################
         
         self.last_time = self.get_clock().now()
@@ -121,7 +78,7 @@ class RobotController(Node):
         # Indexing/tolerance
         self.current_idx = 0
         self.tolerance = math.radians(1)
-        self.required_time = 0.1 # How long the arm is required to be within tolerance
+        self.required_time = 0.01 # How long the arm is required to be within tolerance
         self.stable_start_time = None
         self.move_start_time = self.get_clock().now()
         self.lap_time = 0
@@ -146,21 +103,28 @@ class RobotController(Node):
         # place.position = [math.radians(135), math.radians(45), math.radians(90)]
         # #####################################################################
         
-        start_conf = [0.0,0.0,0.0] # Home
-        pick_conf = [math.radians(30), math.radians(90), math.radians(0)]
+        start_conf = [math.radians(0), math.radians(-90), math.radians(-90)] # Home
+        pick_conf = [math.radians(90), math.radians(-90), math.radians(-90)]
 
         # define obstacles
-        obstacles = [[1.0, 0.0, 1.0, 0.1]]
+        self.obs_x = -0.25
+        self.obs_y = -0.25
+        self.obs_z = 0.10
+        self.obs_radius = .1
+        obstacles = [[self.obs_x, self.obs_y, self.obs_z, self.obs_radius]]
         
-        # Display Obstacle
+        # Display Obstacle 
         self.marker_pub = self.create_publisher(Marker, '/spheres', 10)
         self.publish_sphere()
+        
+        # Display Collision Spheres
+        self.collision_debug = self.create_publisher(Marker, '/arm_collision_spheres', 10)
         
         # Limits (from urdf)
         joint_limits = {
             'joint1': (-3.14, 3.14),
-            'joint2': (-1.57, 1.57),
-            'joint3': (-1.57, 1.57)
+            'joint2': (-3.14, 3.14),
+            'joint3': (-3.14, 3.14)
         }
         
         self.viz_pub = self.create_publisher(Marker, 'rrt_tree', 10)
@@ -213,18 +177,18 @@ class RobotController(Node):
         obs_marker.ns = "obstacles"
         obs_marker.id = 1
 
-        obs_marker.pose.position.x = 1.0
-        obs_marker.pose.position.y = 0.0
-        obs_marker.pose.position.z = 1.0
+        obs_marker.pose.position.x = self.obs_x
+        obs_marker.pose.position.y = self.obs_y
+        obs_marker.pose.position.z = self.obs_z
         
         obs_marker.pose.orientation.x = 0.0
         obs_marker.pose.orientation.y = 0.0
         obs_marker.pose.orientation.z = 0.0
         obs_marker.pose.orientation.w = 1.0
         
-        obs_marker.scale.x = .2
-        obs_marker.scale.y = .2
-        obs_marker.scale.z = .2
+        obs_marker.scale.x = 2 * self.obs_radius
+        obs_marker.scale.y = 2 * self.obs_radius
+        obs_marker.scale.z = 2 * self.obs_radius
         
         obs_marker.color.a = 0.8
         obs_marker.color.r = 1.0
@@ -247,10 +211,6 @@ class RobotController(Node):
         # Get the final goal
         final_goal = self.waypoints[self.current_idx]
         
-        # self.q1 = self.current_JS.position[0]
-        # self.q2 = self.current_JS.position[1]
-        # self.q3 = self.current_JS.position[2]
-        
         vel_1 = self.pid_1.update(final_goal.position[0],self.current_JS.position[0], delta_t)
         vel_2 = self.pid_2.update(final_goal.position[1],self.current_JS.position[1], delta_t)
         vel_3 = self.pid_3.update(final_goal.position[2],self.current_JS.position[2], delta_t)
@@ -258,28 +218,11 @@ class RobotController(Node):
         cmd_msg = Float64MultiArray()
         cmd_msg.data = [float(vel_1), float(vel_2), float(vel_3), float(delta_t)]
         
+        current_joints = [float(self.current_JS.position[0]),float(self.current_JS.position[1]),float(self.current_JS.position[2])]
+        
+        self.publish_arm_collision_model(current_joints)
+        
         self.vel_pub.publish(cmd_msg)
-        
-        # # Base -> Joint 1 (Rotation Z) -> Link 1 Tip (Translation Z)
-        # T_01 = kinematics.rot_z(self.q1) @ kinematics.trans(0, 0, self.L1)
-
-        # # Link 1 -> Joint 2 (Rotation Y) -> Link 2 Tip (Translation X)
-        # T_12 = kinematics.rot_y(self.q2) @ kinematics.trans(self.L2, 0, 0)
-
-        # # Link 2 -> Joint 3 (Rotation Y) -> End Effector (Translation X)
-        # T_23 = kinematics.rot_y(self.q3) @ kinematics.trans(self.L3, 0, 0)
-        
-        # # Position of Elbow (End of Link 1) 
-        # pos_elbow_matrix = T_01
-        # xyz_elbow = pos_elbow_matrix[:3, 3]
-
-        # # Position of Wrist (End of Link 2)
-        # pos_wrist_matrix = T_01 @ T_12
-        # xyz_wrist = pos_wrist_matrix[:3, 3]
-
-        # # Position of Tip (End Effector)
-        # pos_tip_matrix = T_01 @ T_12 @ T_23
-        # xyz_tip = pos_tip_matrix[:3, 3]
         
         err_1 = math.fabs(final_goal.position[0] - self.current_JS.position[0])
         err_2 = math.fabs(final_goal.position[1] - self.current_JS.position[1])
@@ -314,20 +257,57 @@ class RobotController(Node):
         else:
             self.stable_start_time = None
         
-        # msg = JointState()
-        # msg.header.stamp = self.get_clock().now().to_msg()
-        # msg.header.frame_id = "world"
         
-        # msg.name = ['joint1','joint2','joint3']
-        # msg.position = [float(self.q1), float(self.q2), float(self.q3)]
+    def publish_arm_collision_model(self, current_joints):
+        # Mostly made this for debugging, I know its messy lol
         
-        # self.joint_pub.publish(msg)
+        class FakeNode: # creates a dummy object because GetJointLocations expects an object with a .joints attribute
+            def __init__(self, j): self.joints = j
+            
+        node = FakeNode(current_joints)
+
+        # find the sphere centers
         
-        # self.q1 = math.radians(float(input("new q1: ")))
-        # self.q2 = math.radians(float(input('new q2: ')))
-        # self.q3 = math.radians(float(input('new q3: ')))
+        joint_locations = GetJointLocations(node)
+        p_elbow = joint_locations.elbow()
+        p_wrist = joint_locations.wrist()
+        p_tip = joint_locations.tip()
         
+        mid_link_2 = (p_elbow + p_wrist) / 2
+        mid_link_3 = (p_wrist + p_tip) / 2
         
+        sphere_centers = [p_elbow, mid_link_2, p_wrist, mid_link_3, p_tip]
+        
+        # set up the marker
+        marker = Marker()
+        marker.header.frame_id = "base_link"
+        marker.header.stamp = self.get_clock().now().to_msg() 
+        
+        marker.ns = "arm_spheres"   
+        marker.id = 999             
+        marker.type = Marker.SPHERE_LIST
+        marker.action = Marker.ADD
+        
+        # set the scale properly
+        radius = 0.05 
+        marker.scale.x = radius * 2.0
+        marker.scale.y = radius * 2.0
+        marker.scale.z = radius * 2.0
+        
+        marker.color.r = 0.0
+        marker.color.g = 0.0
+        marker.color.b = 1.0
+        marker.color.a = 0.6 
+        
+        # add the points
+        for center in sphere_centers:
+            p = Point()
+            p.x = float(center[0])
+            p.y = float(center[1])
+            p.z = float(center[2])
+            marker.points.append(p)
+            
+        self.collision_debug.publish(marker)
         
         
 def main(args=None):

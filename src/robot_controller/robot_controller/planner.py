@@ -3,6 +3,7 @@ import random
 import math
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
+from rclpy.clock import Clock
 
 class Node:
     def __init__(self, joints):
@@ -59,12 +60,12 @@ class RRTplanner:
         self.obstacles = obstacles
         self.limits = joint_limits
         self.node_list = [self.start]
-        self.step_size = 0.25 
+        self.step_size = 0.1 
         self.viz_pub = viz_pub
         
-        self.L1 = .3
+        self.L1 = .2
         self.L2 = .3
-        self.L3 = .2 
+        self.L3 = .1 
         
         self.marker = Marker()
         self.marker.header.frame_id = "base_link" 
@@ -83,16 +84,16 @@ class RRTplanner:
         # Inside plan(self):
         print("DEBUG: Checking Start and Goal...")
         
-        # if not self.is_collision_free(self.start):
-        #     print("CRITICAL: Start configuration is in collision!")
-        #     return None
-        # if not self.is_collision_free(self.goal):
-        #     print("CRITICAL: Goal configuration is in collision! (Check floor or obstacles)")
-        #     return None
+        if not self.is_collision_free(self.start):
+            print("CRITICAL: Start configuration is in collision!")
+            return None
+        if not self.is_collision_free(self.goal):
+            print("CRITICAL: Goal configuration is in collision! (Check floor or obstacles)")
+            return None
         
         
         # Try to find a path a set number of times
-        for i in range(3000):
+        for i in range(5000):
             
             print(f"We are in iteration #{i}")
             
@@ -104,6 +105,8 @@ class RRTplanner:
             
             # steer towards the random node by the set step size
             new_node = self.steer(nearest_node, rnd_node, self.step_size)
+            
+
             
             # check to see if the new configuration is safe (no collision)
             if self.is_collision_free(new_node):
@@ -209,8 +212,8 @@ class RRTplanner:
                 if dist < (arm_radius + obs_radius):
                     return False # me when collision detected
             
-        # if p_tip[2] < 0.0:
-        #     return False # me when floor detected
+        if p_tip[2] < 0.0:
+            return False # me when floor detected
         
         return True # me when safe
     
@@ -244,17 +247,21 @@ class RRTplanner:
         # return the path list (but reversed because we started with the goal)
         return path[::-1]
     
+
+    
 class GetJointLocations:
     def __init__(self,node):
-        self.L1 = .3
+        self.L1 = .2
         self.L2 = .3
-        self.L3 = .2 
+        self.L3 = .1 
+        self.base_height = 0.05
         
         self.q1 = node.joints[0]
-        self.q2 = node.joints[1]
+        self.q2 = node.joints[1] - (np.pi / 2)
         self.q3 = node.joints[2]
         
-        self.T_01 = Kinematics.rot_z(self.q1) @ Kinematics.trans(0, 0, self.L1) # Get rotation from Base to elbow
+        self.T_base_offset = Kinematics.trans(0, 0, self.base_height)
+        self.T_01 = self.T_base_offset @ Kinematics.rot_z(self.q1) @ Kinematics.trans(0, 0, self.L1) # Get rotation from Base to elbow
         self.T_12 = Kinematics.rot_y(self.q2) @ Kinematics.trans(self.L2, 0, 0) # rotation from elbow to wrist
         self.T_23 = Kinematics.rot_y(self.q3) @ Kinematics.trans(self.L3, 0, 0) # rotation from wrist to tip
         
