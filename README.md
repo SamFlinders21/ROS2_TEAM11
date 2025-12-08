@@ -9,12 +9,12 @@ colcon build --package-select robot_controller
 
 
 Terminal 1: (keep this one running b/c its what runs RViz with the correct settings)
-ros2 run robot_controller visualize.launch.py
+ros2 launch robot_controller visualize.launch.py
 
 Terminal 2: (This one just publishes the joint states for RViz and for the main loop)
 ros2 run robot_controller joint
 
-Terminal 3: (This one has the main loop. The robots movement will start/stop when you run/exit the code
+Terminal 3: (This one has the main loop.) The robots movement will start/stop when you run/exit the code
 ros2 run robot_controller run_controller
 
 To change the pick/place locations, go into controller.py and edit the angles defined with pick/place (i made a large line of ### to seperate this part from the rest of the code)
