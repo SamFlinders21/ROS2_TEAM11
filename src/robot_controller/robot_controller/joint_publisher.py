@@ -46,8 +46,6 @@ class JointPublisher(Node):
             
         if len(cmd_msg.data) >= 3:
             
-            
-            
             self.last_cmd_time = self.get_clock().now()
             self.vel[0] = cmd_msg.data[0]
             self.vel[1] = cmd_msg.data[1]

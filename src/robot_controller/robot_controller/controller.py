@@ -45,12 +45,6 @@ class PID_controller:
         
         return output
     
-# Point Math
-# class point_calculations(self):
-#     def calculations(self):
-#         self.elbow.x = self.l1 * math.cos(self.current_position.position[2])
-#         self.elbow.y = self.l1 * math.sin(self.current_position.position[3])
-#         self.
     
 class RobotController(Node):
     def __init__(self):
@@ -67,9 +61,9 @@ class RobotController(Node):
         self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
         
         #################################################
-        self.pid_1 = PID_controller(Kp=8,Ki=0,Kd=0.20)
-        self.pid_2 = PID_controller(Kp=5,Ki=0,Kd=0.10)
-        self.pid_3 = PID_controller(Kp=3,Ki=0,Kd=0.10)
+        self.pid_1 = PID_controller(Kp=2,Ki=0,Kd=0.20)
+        self.pid_2 = PID_controller(Kp=2,Ki=0,Kd=0.10)
+        self.pid_3 = PID_controller(Kp=2,Ki=0,Kd=0.10)
         #################################################
         
         self.last_time = self.get_clock().now()
@@ -78,7 +72,7 @@ class RobotController(Node):
         # Indexing/tolerance
         self.current_idx = 0
         self.tolerance = math.radians(1)
-        self.required_time = 0.01 # How long the arm is required to be within tolerance
+        self.required_time = 0.001 # How long the arm is required to be within tolerance
         self.stable_start_time = None
         self.move_start_time = self.get_clock().now()
         self.lap_time = 0
@@ -87,30 +81,15 @@ class RobotController(Node):
         self.current_JS = JointState()
         self.name = ['joint1','joint2','joint3']
         self.current_JS.position = [0.0,0.0,0.0]
-
-        # # Define home angles
-        # home = JointState()
-        # home.name = ['shoulder_joint','elbow_joint']
-        # home.position = [0.0,0.0,0.0]
-        
-        # #####################################################################
-        # pick = JointState()
-        # pick.name = ['joint1','joint2','joint3']
-        # pick.position = [math.radians(0),math.radians(120),math.radians(60)]
-            
-        # place = JointState()
-        # place.name = ['joint1','joint2','joint3']
-        # place.position = [math.radians(135), math.radians(45), math.radians(90)]
-        # #####################################################################
         
         start_conf = [math.radians(0), math.radians(-90), math.radians(-90)] # Home
         pick_conf = [math.radians(90), math.radians(-90), math.radians(-90)]
 
         # define obstacles
-        self.obs_x = -0.25
-        self.obs_y = -0.25
-        self.obs_z = 0.10
-        self.obs_radius = .1
+        self.obs_x = -0.3
+        self.obs_y = -0.3
+        self.obs_z = 0.20
+        self.obs_radius = .25
         obstacles = [[self.obs_x, self.obs_y, self.obs_z, self.obs_radius]]
         
         # Display Obstacle 
@@ -131,10 +110,10 @@ class RobotController(Node):
 
         # initialize the planner
         self.get_logger().info('Starting RRT Planner...')
-        rrt = RRTplanner(start_conf,pick_conf, obstacles, joint_limits, self.viz_pub)
+        self.rrt = RRTplanner(start_conf,pick_conf, obstacles, joint_limits, self.viz_pub)
         
         # run the planner
-        path_list = rrt.plan()
+        path_list = self.rrt.plan()
         
         self.waypoints = []
         
@@ -149,18 +128,12 @@ class RobotController(Node):
                 wp.position = point
                 self.waypoints.append(wp)
         
-        # Creates a list of the targets
-        # self.waypoints = [home, pick, place]
-
-        # Trajectory settings
-        # self.move_duration = 3.0 # Take 3 seconds to move between points
-        
         # Track where we started the current motion
         self.start_angles = [0.0, 0.0, 0.0]
         
         # Creates a subscriber node that listens to the joint_states topic, 
         # expecting a "JointState" message. Each time that it receives one, 
-        # it calls the self.joint_callback function
+        # it calls the self.sensor_callback function
         self.subscription = self.create_subscription(
             JointState,
             '/joint_states',
@@ -168,34 +141,8 @@ class RobotController(Node):
             10
         )
         
-    def publish_sphere(self):
-        obs_marker = Marker()
-        obs_marker.header.frame_id = "base_link"
-        obs_marker.header.stamp = self.get_clock().now().to_msg()
-        obs_marker.type = Marker.SPHERE
-        obs_marker.action = Marker.ADD
-        obs_marker.ns = "obstacles"
-        obs_marker.id = 1
+        self.moving_forward = True
 
-        obs_marker.pose.position.x = self.obs_x
-        obs_marker.pose.position.y = self.obs_y
-        obs_marker.pose.position.z = self.obs_z
-        
-        obs_marker.pose.orientation.x = 0.0
-        obs_marker.pose.orientation.y = 0.0
-        obs_marker.pose.orientation.z = 0.0
-        obs_marker.pose.orientation.w = 1.0
-        
-        obs_marker.scale.x = 2 * self.obs_radius
-        obs_marker.scale.y = 2 * self.obs_radius
-        obs_marker.scale.z = 2 * self.obs_radius
-        
-        obs_marker.color.a = 0.8
-        obs_marker.color.r = 1.0
-        obs_marker.color.g = 0.0
-        obs_marker.color.b = 0.0 
-        
-        self.marker_pub.publish(obs_marker)
         
         
     def sensor_callback(self,msg):
@@ -250,16 +197,53 @@ class RobotController(Node):
                 self.stable_start_time = None
                 
                 # 3. Increment Index
-                self.current_idx += 1
-                if self.current_idx >= len(self.waypoints):
-                    self.current_idx = 0
-                    print("Resetting to Waypoint 0")
+                if self.moving_forward:
+                    self.current_idx += 1
+                else:
+                    self.current_idx -= 1
+                    
+                if self.current_idx >= len(self.waypoints) and self.moving_forward:
+                    
+
+                    user_input = input('Type "r" to return to start. ')
+                    
+                    if user_input == 'r':
+                        self.moving_forward = False
+                        self.current_idx = len(self.waypoints) - 1
+                        print('Returning to Start...')
+                    
+                    else:
+                        print('Invalid Input. Stopping.')
+                            
+                elif not self.moving_forward and self.current_idx < 0:
+                    print('Returned to Start!')
+
+                    user_input = input('Enter one of the following: \n'
+                                       '"new" to generate a new path \n'
+                                       '"old" to repeat the same path \n')
+                    
+                    if user_input == 'new':
+                        self.moving_forward = True
+                        self.current_idx = 0
+                        print('Generating new RRT Plan...')
+                        path_list = self.rrt.plan()
+                        self.waypoints = []
+                        if path_list is not None:
+                            for point in path_list:
+                                wp = JointState()
+                                wp.name = ['joint1','joint2','joint3']
+                                wp.position = point
+                                self.waypoints.append(wp)
+                        
+                    elif user_input == 'old':
+                        self.moving_forward = True
+                        self.current_idx = 0
+                        print('Moving to Goal with same Plan...')
         else:
             self.stable_start_time = None
         
         
     def publish_arm_collision_model(self, current_joints):
-        # Mostly made this for debugging, I know its messy lol
         
         class FakeNode: # creates a dummy object because GetJointLocations expects an object with a .joints attribute
             def __init__(self, j): self.joints = j
@@ -308,6 +292,35 @@ class RobotController(Node):
             marker.points.append(p)
             
         self.collision_debug.publish(marker)
+        
+    def publish_sphere(self):
+        obs_marker = Marker()
+        obs_marker.header.frame_id = "base_link"
+        obs_marker.header.stamp = self.get_clock().now().to_msg()
+        obs_marker.type = Marker.SPHERE
+        obs_marker.action = Marker.ADD
+        obs_marker.ns = "obstacles"
+        obs_marker.id = 1
+
+        obs_marker.pose.position.x = self.obs_x
+        obs_marker.pose.position.y = self.obs_y
+        obs_marker.pose.position.z = self.obs_z
+        
+        obs_marker.pose.orientation.x = 0.0
+        obs_marker.pose.orientation.y = 0.0
+        obs_marker.pose.orientation.z = 0.0
+        obs_marker.pose.orientation.w = 1.0
+        
+        obs_marker.scale.x = 2 * self.obs_radius
+        obs_marker.scale.y = 2 * self.obs_radius
+        obs_marker.scale.z = 2 * self.obs_radius
+        
+        obs_marker.color.a = 1.0
+        obs_marker.color.r = 1.0
+        obs_marker.color.g = 0.0
+        obs_marker.color.b = 0.0 
+        
+        self.marker_pub.publish(obs_marker)
         
         
 def main(args=None):

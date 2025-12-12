@@ -79,23 +79,23 @@ class RRTplanner:
         
     def plan(self):
         
-        print("DEBUG: Starting RRT Plan...") 
+        print("Starting RRT Plan...") 
         
         # Inside plan(self):
-        print("DEBUG: Checking Start and Goal...")
+        print("Checking Start and Goal...")
         
         if not self.is_collision_free(self.start):
-            print("CRITICAL: Start configuration is in collision!")
+            print("ERROR: Start configuration is in collision!")
             return None
         if not self.is_collision_free(self.goal):
-            print("CRITICAL: Goal configuration is in collision! (Check floor or obstacles)")
+            print("ERROR: Goal configuration is in collision! (Check floor or obstacles)")
             return None
         
         
         # Try to find a path a set number of times
         for i in range(5000):
             
-            print(f"We are in iteration #{i}")
+            print(f"We are in iteration #{i}!")
             
             # pick a random node
             rnd_node = self.get_random_node()
@@ -116,12 +116,22 @@ class RRTplanner:
                 # check if we are close enough to the goal
                 if self.calc_dist(new_node, self.goal) < 0.2:
                     print(f"Goal Reached in {i} iterations!")
-                    
                     self.goal.parent = new_node
+                    
+                    # generate the random path
                     final_path = self.generate_final_path(self.goal)
+                    
+                    # refine the path via smoothing up to 5 times
+                    for _ in range(5):
+                        old_len = len(final_path)
+                        final_path = self.path_smoother(final_path)
+                    
+                        # if the latest iteration does do anything, stop smoothing
+                        if len(final_path) == old_len: break
+                        
                     return final_path
                 
-            if i % 500 == 0:
+            if i % 50 == 0:
                 dist_to_goal = self.calc_dist(nearest_node, self.goal)
                 print(f"Iter {i}: Tree size {len(self.node_list)}. Nearest dist to goal: {dist_to_goal:.4f}")
                 
@@ -247,7 +257,66 @@ class RRTplanner:
         # return the path list (but reversed because we started with the goal)
         return path[::-1]
     
-
+    
+    def path_smoother(self,path_list):
+        print('Waypoints received, smoothing path...')
+        if len(path_list) < 3:
+            return path_list
+        
+        smoothed_path = [path_list[0]]
+        idx = 0
+        
+        while idx < len(path_list) - 1:
+            # look ahead from the end of the list back to the current node
+            found_shortcut = False
+            
+            # iterate backwards to find the furthest possible reachable node
+            for check_index in range(len(path_list) - 1, idx, -1):
+                
+                # check if we can go straight from current to check index
+                if self.segment_collision_check(path_list[idx], path_list[check_index]):
+                    # if the shortcut is safe, add that target node and jump the idx forward
+                    smoothed_path.append(path_list[check_index])
+                    idx = check_index
+                    found_shortcut = True
+                    break
+                
+                if not found_shortcut:
+                    smoothed_path.append(path_list[idx + 1])
+                    idx += 1
+                    
+        print(f'Path smoothed from {len(path_list)} segments to {len(smoothed_path)} segments.')
+        return smoothed_path
+    
+    def segment_collision_check(self, start_conf, end_conf):
+        start_joints = np.array(start_conf)
+        end_joints = np.array(end_conf)
+        
+        vector = end_joints - start_joints
+        distance = np.linalg.norm(vector)
+        
+        step_size = 0.1
+        num_steps = int(distance / step_size)
+        
+        # if the points are really close, just check the end
+        if num_steps < 2:
+            return True
+        
+        unit_vector = vector/distance
+        
+        # walk along the line
+        for i in range(1,num_steps):
+            #calculate intermediate joint config
+            step_joints = start_joints + (unit_vector * (i * step_size))
+            
+            # make a temp node to check collision
+            temp_node = Node(step_joints.tolist())
+            
+            # now check that node for collision
+            if not self.is_collision_free(temp_node):
+                return False
+            
+        return True
     
 class GetJointLocations:
     def __init__(self,node):
