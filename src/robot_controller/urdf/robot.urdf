@@ -36,7 +36,7 @@
     <parent link="link1"/>
     <child link="link2"/>
     <origin xyz="0 0 0.2" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/> <limit lower="-1.57" upper="1.57" effort="10.0" velocity="1.0"/>
+    <axis xyz="0 1 0"/> <limit lower="-3.14" upper="3.14" effort="10.0" velocity="1.0"/>
   </joint>
 
   <link name="link2">
@@ -56,7 +56,7 @@
     <child link="end_effector"/>
     <origin xyz="0 0 0.3" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit lower="-1.57" upper="1.57" effort="10.0" velocity="1.0"/>
+    <limit lower="-3.14" upper="3.14" effort="10.0" velocity="1.0"/>
   </joint>
 
   <link name="end_effector">

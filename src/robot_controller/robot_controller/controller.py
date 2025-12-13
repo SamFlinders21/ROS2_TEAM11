@@ -4,57 +4,13 @@ import math
 import rclpy
 from rclpy.node import Node
 import numpy as np
-
-# These message types are required
 from std_msgs.msg import Float64
 from std_msgs.msg import Float64MultiArray
 from sensor_msgs.msg import JointState
 from geometry_msgs.msg import Point
-from geometry_msgs.msg import Twist
-from geometry_msgs.msg import TwistStamped
 from visualization_msgs.msg import Marker
+from robot_controller.planner import RRTplanner, GetJointLocations, Kinematics
 
-class kinematics:        
-    def rot_x(theta):
-        rad = theta
-        c = np.cos(rad)
-        s = np.sin(rad)
-        return np.array([
-            [1, 0, 0, 0],
-            [0, c, -s, 0],
-            [0, s, c, 0],
-            [0, 0, 0, 1]
-        ])
-        
-    def rot_y(theta):
-        rad = theta
-        c = np.cos(rad)
-        s = np.sin(rad)
-        return np.array([
-            [c, 0, s, 0],
-            [0, 1, 0, 0],
-            [-s, 0, c, 0],
-            [0, 0, 0, 1]
-        ])
-    
-    def rot_z(theta):
-        rad = theta
-        c = np.cos(rad)
-        s = np.sin(rad)
-        return np.array([
-            [c, -s, 0, 0],
-            [s, c, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
-        ])
-        
-    def trans(x,y,z):
-        return np.array([
-            [1, 0, 0, x],
-            [0, 1, 0, y],
-            [0, 0, 1, z],
-            [0, 0, 0, 1]
-        ])
 
 # PID Math
 class PID_controller:
@@ -89,12 +45,6 @@ class PID_controller:
         
         return output
     
-# Point Math
-# class point_calculations(self):
-#     def calculations(self):
-#         self.elbow.x = self.l1 * math.cos(self.current_position.position[2])
-#         self.elbow.y = self.l1 * math.sin(self.current_position.position[3])
-#         self.
     
 class RobotController(Node):
     def __init__(self):
@@ -105,15 +55,15 @@ class RobotController(Node):
         self.q2 = math.radians(0)
         self.q3 = math.radians(0)
         
-        self.L1 = .3
+        self.L1 = .2
         self.L2 = .3
-        self.L3 = .2        
+        self.L3 = .1        
         self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
         
         #################################################
-        self.pid_1 = PID_controller(Kp=3,Ki=0,Kd=0.20)
-        self.pid_2 = PID_controller(Kp=2,Ki=0,Kd=0.10)
-        self.pid_3 = PID_controller(Kp=1,Ki=0,Kd=0.0)
+        self.pid_1 = PID_controller(Kp=9,Ki=0,Kd=0.20)
+        self.pid_2 = PID_controller(Kp=9,Ki=0,Kd=0.10)
+        self.pid_3 = PID_controller(Kp=2,Ki=0,Kd=0.10)
         #################################################
         
         self.last_time = self.get_clock().now()
@@ -122,7 +72,7 @@ class RobotController(Node):
         # Indexing/tolerance
         self.current_idx = 0
         self.tolerance = math.radians(1)
-        self.required_time = 2.0 # How long the arm is required to be within tolerance
+        self.required_time = 0.001 # How long the arm is required to be within tolerance
         self.stable_start_time = None
         self.move_start_time = self.get_clock().now()
         self.lap_time = 0
@@ -131,38 +81,75 @@ class RobotController(Node):
         self.current_JS = JointState()
         self.name = ['joint1','joint2','joint3']
         self.current_JS.position = [0.0,0.0,0.0]
-
-        # Define home angles
-        home = JointState()
-        home.name = ['shoulder_joint','elbow_joint']
-        home.position = [0.0,0.0,0.0]
         
-        pick = JointState()
-        pick.name = ['joint1','joint2','joint3']
-        pick.position = [math.radians(0),math.radians(120),math.radians(60)]
+        start_conf = [math.radians(0), math.radians(-90), math.radians(-90)] # Home
+        pick_conf = [math.radians(90), math.radians(-90), math.radians(-90)]
+
+        # define obstacles
+        self.obs_x = -0.3
+        self.obs_y = -0.3
+        self.obs_z = 0.20
+        self.obs_radius = .25
+        obstacles = [[self.obs_x, self.obs_y, self.obs_z, self.obs_radius]]
+        
+        # Display Obstacle 
+        self.marker_pub = self.create_publisher(Marker, '/spheres', 10)
+        self.publish_sphere()
+        
+        # Display Collision Spheres
+        self.collision_debug = self.create_publisher(Marker, '/arm_collision_spheres', 10)
+        
+        # Limits (from urdf)
+        joint_limits = {
+            'joint1': (-3.14, 3.14),
+            'joint2': (-3.14, 3.14),
+            'joint3': (-3.14, 3.14)
+        }
+        
+        self.viz_pub = self.create_publisher(Marker, 'rrt_tree', 10)
+
+        # initialize the planner
+        self.get_logger().info('Starting RRT Planner...')
+        self.rrt = RRTplanner(start_conf,pick_conf, obstacles, joint_limits, self.viz_pub)
+        
+        # run the planner
+        path_list = self.rrt.plan()
+        
+        self.waypoints = []
+        
+        if path_list is None:
+            self.get_logger().error("RRT failed to find a path :(")
+        else:
+            self.get_logger().info(f"Path found with {len(path_list)} steps!")
             
-        place = JointState()
-        place.name = ['joint1','joint2','joint3']
-        place.position = [math.radians(135), math.radians(45), math.radians(0)]
-        
-        # Creates a list of the targets
-        self.waypoints = [home, pick, place]
-
-        # Trajectory settings
-        self.move_duration = 3.0 # Take 3 seconds to move between points
+            for point in path_list:
+                wp = JointState()
+                wp.name = ['joint1', 'joint2', 'joint3']
+                wp.position = point
+                self.waypoints.append(wp)
         
         # Track where we started the current motion
         self.start_angles = [0.0, 0.0, 0.0]
         
         # Creates a subscriber node that listens to the joint_states topic, 
         # expecting a "JointState" message. Each time that it receives one, 
-        # it calls the self.joint_callback function
+        # it calls the self.sensor_callback function
         self.subscription = self.create_subscription(
             JointState,
             '/joint_states',
             self.sensor_callback,
             10
         )
+        
+        self.moving_forward = True
+        
+        self.time_history = []
+        self.error_history_1 = []
+        self.error_history_2 = []
+        self.error_history_3 = []
+        self.plot_start_time = self.get_clock().now()
+
+        
         
     def sensor_callback(self,msg):
         if len(msg.position) >= 3:
@@ -177,10 +164,6 @@ class RobotController(Node):
         # Get the final goal
         final_goal = self.waypoints[self.current_idx]
         
-        # self.q1 = self.current_JS.position[0]
-        # self.q2 = self.current_JS.position[1]
-        # self.q3 = self.current_JS.position[2]
-        
         vel_1 = self.pid_1.update(final_goal.position[0],self.current_JS.position[0], delta_t)
         vel_2 = self.pid_2.update(final_goal.position[1],self.current_JS.position[1], delta_t)
         vel_3 = self.pid_3.update(final_goal.position[2],self.current_JS.position[2], delta_t)
@@ -188,28 +171,22 @@ class RobotController(Node):
         cmd_msg = Float64MultiArray()
         cmd_msg.data = [float(vel_1), float(vel_2), float(vel_3), float(delta_t)]
         
+        current_joints = [float(self.current_JS.position[0]),float(self.current_JS.position[1]),float(self.current_JS.position[2])]
+        
+        self.publish_arm_collision_model(current_joints)
+        
         self.vel_pub.publish(cmd_msg)
         
-        # # Base -> Joint 1 (Rotation Z) -> Link 1 Tip (Translation Z)
-        # T_01 = kinematics.rot_z(self.q1) @ kinematics.trans(0, 0, self.L1)
+        e1_signed = final_goal.position[0] - self.current_JS.position[0]
+        e2_signed = final_goal.position[1] - self.current_JS.position[1]
+        e3_signed = final_goal.position[2] - self.current_JS.position[2]
 
-        # # Link 1 -> Joint 2 (Rotation Y) -> Link 2 Tip (Translation X)
-        # T_12 = kinematics.rot_y(self.q2) @ kinematics.trans(self.L2, 0, 0)
+        t_now = (self.get_clock().now() - self.plot_start_time).nanoseconds / 1e9
 
-        # # Link 2 -> Joint 3 (Rotation Y) -> End Effector (Translation X)
-        # T_23 = kinematics.rot_y(self.q3) @ kinematics.trans(self.L3, 0, 0)
-        
-        # # Position of Elbow (End of Link 1) 
-        # pos_elbow_matrix = T_01
-        # xyz_elbow = pos_elbow_matrix[:3, 3]
-
-        # # Position of Wrist (End of Link 2)
-        # pos_wrist_matrix = T_01 @ T_12
-        # xyz_wrist = pos_wrist_matrix[:3, 3]
-
-        # # Position of Tip (End Effector)
-        # pos_tip_matrix = T_01 @ T_12 @ T_23
-        # xyz_tip = pos_tip_matrix[:3, 3]
+        self.time_history.append(t_now)
+        self.error_history_1.append(e1_signed)
+        self.error_history_2.append(e2_signed)
+        self.error_history_3.append(e3_signed)
         
         err_1 = math.fabs(final_goal.position[0] - self.current_JS.position[0])
         err_2 = math.fabs(final_goal.position[1] - self.current_JS.position[1])
@@ -237,27 +214,149 @@ class RobotController(Node):
                 self.stable_start_time = None
                 
                 # 3. Increment Index
-                self.current_idx += 1
-                if self.current_idx >= len(self.waypoints):
-                    self.current_idx = 0
-                    print("Resetting to Waypoint 0")
+                if self.moving_forward:
+                    self.current_idx += 1
+                else:
+                    self.current_idx -= 1
+                    
+                if self.current_idx >= len(self.waypoints) and self.moving_forward:
+                    
+
+                    user_input = input('Type "r" to return to start. ')
+                    
+                    if user_input == 'r':
+                        self.moving_forward = False
+                        self.current_idx = len(self.waypoints) - 1
+                        print('Returning to Start...')
+                    
+                    else:
+                        print('Invalid Input. Stopping.')
+                            
+                elif not self.moving_forward and self.current_idx < 0:
+                    print('Returned to Start!')
+
+                    user_input = input('Enter one of the following: \n'
+                                       '"new" to generate a new path \n'
+                                       '"old" to repeat the same path \n')
+                    
+                    if user_input == 'new':
+                        self.moving_forward = True
+                        self.current_idx = 0
+                        print('Generating new RRT Plan...')
+                        path_list = self.rrt.plan()
+                        self.waypoints = []
+                        if path_list is not None:
+                            for point in path_list:
+                                wp = JointState()
+                                wp.name = ['joint1','joint2','joint3']
+                                wp.position = point
+                                self.waypoints.append(wp)
+                        
+                    elif user_input == 'old':
+                        self.moving_forward = True
+                        self.current_idx = 0
+                        print('Moving to Goal with same Plan...')
         else:
             self.stable_start_time = None
         
-        # msg = JointState()
-        # msg.header.stamp = self.get_clock().now().to_msg()
-        # msg.header.frame_id = "world"
+    def plot_results(self):
+        self.get_logger().info("Generating Error Plot...")
         
-        # msg.name = ['joint1','joint2','joint3']
-        # msg.position = [float(self.q1), float(self.q2), float(self.q3)]
+        plt.figure(figsize=(10, 6))
         
-        # self.joint_pub.publish(msg)
+        # Plot all three joints
+        plt.plot(self.time_history, self.error_history_1, label='Joint 1 Error', color='r')
+        plt.plot(self.time_history, self.error_history_2, label='Joint 2 Error', color='g')
+        plt.plot(self.time_history, self.error_history_3, label='Joint 3 Error', color='b')
         
-        # self.q1 = math.radians(float(input("new q1: ")))
-        # self.q2 = math.radians(float(input('new q2: ')))
-        # self.q3 = math.radians(float(input('new q3: ')))
+        # Add a zero line so you can see when it converges
+        plt.axhline(0, color='black', linestyle='--', linewidth=1)
         
+        plt.title("PID Error over Time")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Error (radians)")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+    
+    def publish_arm_collision_model(self, current_joints):
         
+        class FakeNode: # creates a dummy object because GetJointLocations expects an object with a .joints attribute
+            def __init__(self, j): self.joints = j
+            
+        node = FakeNode(current_joints)
+
+        # find the sphere centers
+        
+        joint_locations = GetJointLocations(node)
+        p_elbow = joint_locations.elbow()
+        p_wrist = joint_locations.wrist()
+        p_tip = joint_locations.tip()
+        
+        mid_link_2 = (p_elbow + p_wrist) / 2
+        mid_link_3 = (p_wrist + p_tip) / 2
+        
+        sphere_centers = [p_elbow, mid_link_2, p_wrist, mid_link_3, p_tip]
+        
+        # set up the marker
+        marker = Marker()
+        marker.header.frame_id = "base_link"
+        marker.header.stamp = self.get_clock().now().to_msg() 
+        
+        marker.ns = "arm_spheres"   
+        marker.id = 999             
+        marker.type = Marker.SPHERE_LIST
+        marker.action = Marker.ADD
+        
+        # set the scale properly
+        radius = 0.05 
+        marker.scale.x = radius * 2.0
+        marker.scale.y = radius * 2.0
+        marker.scale.z = radius * 2.0
+        
+        marker.color.r = 0.0
+        marker.color.g = 0.0
+        marker.color.b = 1.0
+        marker.color.a = 0.6 
+        
+        # add the points
+        for center in sphere_centers:
+            p = Point()
+            p.x = float(center[0])
+            p.y = float(center[1])
+            p.z = float(center[2])
+            marker.points.append(p)
+            
+        self.collision_debug.publish(marker)
+        
+    def publish_sphere(self):
+        obs_marker = Marker()
+        obs_marker.header.frame_id = "base_link"
+        obs_marker.header.stamp = self.get_clock().now().to_msg()
+        obs_marker.type = Marker.SPHERE
+        obs_marker.action = Marker.ADD
+        obs_marker.ns = "obstacles"
+        obs_marker.id = 1
+
+        obs_marker.pose.position.x = self.obs_x
+        obs_marker.pose.position.y = self.obs_y
+        obs_marker.pose.position.z = self.obs_z
+        
+        obs_marker.pose.orientation.x = 0.0
+        obs_marker.pose.orientation.y = 0.0
+        obs_marker.pose.orientation.z = 0.0
+        obs_marker.pose.orientation.w = 1.0
+        
+        obs_marker.scale.x = 2 * self.obs_radius
+        obs_marker.scale.y = 2 * self.obs_radius
+        obs_marker.scale.z = 2 * self.obs_radius
+        
+        obs_marker.color.a = 1.0
+        obs_marker.color.r = 1.0
+        obs_marker.color.g = 0.0
+        obs_marker.color.b = 0.0 
+        
+        self.marker_pub.publish(obs_marker)
         
         
 def main(args=None):
@@ -269,6 +368,8 @@ def main(args=None):
     try:
         rclpy.spin(robot_controller)
     except KeyboardInterrupt:
+        print("Plotting data.")
+        robot_controller.plot_results()
         pass
     
     robot_controller.destroy_node()
