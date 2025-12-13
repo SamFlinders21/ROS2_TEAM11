@@ -61,8 +61,8 @@ class RobotController(Node):
         self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
         
         #################################################
-        self.pid_1 = PID_controller(Kp=2,Ki=0,Kd=0.20)
-        self.pid_2 = PID_controller(Kp=2,Ki=0,Kd=0.10)
+        self.pid_1 = PID_controller(Kp=9,Ki=0,Kd=0.20)
+        self.pid_2 = PID_controller(Kp=9,Ki=0,Kd=0.10)
         self.pid_3 = PID_controller(Kp=2,Ki=0,Kd=0.10)
         #################################################
         
@@ -142,6 +142,12 @@ class RobotController(Node):
         )
         
         self.moving_forward = True
+        
+        self.time_history = []
+        self.error_history_1 = []
+        self.error_history_2 = []
+        self.error_history_3 = []
+        self.plot_start_time = self.get_clock().now()
 
         
         
@@ -170,6 +176,17 @@ class RobotController(Node):
         self.publish_arm_collision_model(current_joints)
         
         self.vel_pub.publish(cmd_msg)
+        
+        e1_signed = final_goal.position[0] - self.current_JS.position[0]
+        e2_signed = final_goal.position[1] - self.current_JS.position[1]
+        e3_signed = final_goal.position[2] - self.current_JS.position[2]
+
+        t_now = (self.get_clock().now() - self.plot_start_time).nanoseconds / 1e9
+
+        self.time_history.append(t_now)
+        self.error_history_1.append(e1_signed)
+        self.error_history_2.append(e2_signed)
+        self.error_history_3.append(e3_signed)
         
         err_1 = math.fabs(final_goal.position[0] - self.current_JS.position[0])
         err_2 = math.fabs(final_goal.position[1] - self.current_JS.position[1])
@@ -242,7 +259,26 @@ class RobotController(Node):
         else:
             self.stable_start_time = None
         
+    def plot_results(self):
+        self.get_logger().info("Generating Error Plot...")
         
+        plt.figure(figsize=(10, 6))
+        
+        # Plot all three joints
+        plt.plot(self.time_history, self.error_history_1, label='Joint 1 Error', color='r')
+        plt.plot(self.time_history, self.error_history_2, label='Joint 2 Error', color='g')
+        plt.plot(self.time_history, self.error_history_3, label='Joint 3 Error', color='b')
+        
+        # Add a zero line so you can see when it converges
+        plt.axhline(0, color='black', linestyle='--', linewidth=1)
+        
+        plt.title("PID Error over Time")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Error (radians)")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+    
     def publish_arm_collision_model(self, current_joints):
         
         class FakeNode: # creates a dummy object because GetJointLocations expects an object with a .joints attribute
@@ -332,6 +368,8 @@ def main(args=None):
     try:
         rclpy.spin(robot_controller)
     except KeyboardInterrupt:
+        print("Plotting data.")
+        robot_controller.plot_results()
         pass
     
     robot_controller.destroy_node()
